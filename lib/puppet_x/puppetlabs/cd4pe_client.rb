@@ -1,4 +1,3 @@
-require 'puppet'
 require 'puppet_x'
 require 'net/http'
 require 'uri'
@@ -16,20 +15,19 @@ module PuppetX::Puppetlabs
         server: uri.host,
         port: uri.port || '8080',
         scheme: uri.scheme || 'http',
-        token: task_token,
-        task_id: task_id,
-        task_owner: task_owner,
+        token: deployment_token,
+        deployment_id: deployment_id,
+        deployment_owner: deployment_owner,
       }
 
-      @owner_ajax_path = "/#{task_owner}/ajax"
-      @owner_route = "/#{task_owner}"
+      @owner_ajax_path = "/#{deployment_owner}/ajax"
     end
 
     def pin_nodes_to_env(nodes, node_group_id)
       payload = {
         op: 'PinNodesToGroup',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           nodeGroupId: node_group_id,
           nodes: nodes,
         },
@@ -38,7 +36,7 @@ module PuppetX::Puppetlabs
     end
 
     def get_node_group(node_group_id)
-      query = "?op=GetNodeGroupInfo&deploymentId=#{task_id}&nodeGroupId=#{node_group_id}"
+      query = "?op=GetNodeGroupInfo&deploymentId=#{deployment_id}&nodeGroupId=#{node_group_id}"
       complete_path = @owner_ajax_path + query
       make_request(:get, complete_path)
     end
@@ -47,7 +45,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'DeleteNodeGroup',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           nodeGroupId: node_group_id,
         },
       }
@@ -58,7 +56,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'DeployCode',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           environmentName: environment_name,
         },
       }
@@ -68,7 +66,7 @@ module PuppetX::Puppetlabs
     end
 
     def get_approval_state # rubocop:disable Style/AccessorMethodName
-      query = "?op=GetDeploymentApprovalState&deploymentId=#{task_id}"
+      query = "?op=GetDeploymentApprovalState&deploymentId=#{deployment_id}"
       complete_path = @owner_ajax_path + query
       make_request(:get, complete_path)
     end
@@ -77,8 +75,22 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'SetDeploymentPendingApproval',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           environment: environment_name,
+        },
+      }
+
+      make_request(:post, @owner_ajax_path, payload.to_json)
+    end
+
+    def set_deployment_approval_state(environment_name, state, username)
+      payload = {
+        op: 'SetDeploymentApprovalState',
+        content: {
+          deploymentId: @config[:deployment_id],
+          environment: environment_name,
+          state: state,
+          username: username,
         },
       }
 
@@ -89,7 +101,7 @@ module PuppetX::Puppetlabs
       run_puppet_payload = {
         op: 'RunPuppet',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           environmentName: environment_name,
           nodes: nodes,
           withNoop: noop,
@@ -103,7 +115,7 @@ module PuppetX::Puppetlabs
       get_job_status_payload = {
         op: 'GetPuppetRunStatus',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           jobId: job,
         },
       }
@@ -114,7 +126,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'CreateTempNodeGroup',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           parentNodeGroupId: parent_node_group_id,
           environmentName: environment_name,
           isEnvironmentNodeGroup: is_environment_node_group,
@@ -127,7 +139,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'DeleteGitBranch',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           repoType: repo_type,
           branchName: branch_name,
         },
@@ -139,7 +151,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'UpdateGitRef',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           repoType: repo_type,
           branchName: branch_name,
           commitSha: commit_sha,
@@ -152,7 +164,7 @@ module PuppetX::Puppetlabs
       payload = {
         op: 'CreateGitBranch',
         content: {
-          deploymentId: @config[:task_id],
+          deploymentId: @config[:deployment_id],
           repoType: repo_type,
           branchName: branch_name,
           commitSha: commit_sha,
@@ -162,42 +174,83 @@ module PuppetX::Puppetlabs
       make_request(:post, @owner_ajax_path, payload.to_json)
     end
 
-    def get_job_script_and_control_repo(target_dir)
-      endpoint = "#{@owner_route}/getJobScriptAndControlRepo?jobInstanceId=#{task_id}"
-      response = make_request(:get, endpoint, '')
-      create_and_write_temp_file(target_dir, response.body)
+    def get_git_branches(repo_type)
+      query = "?op=GetGitBranches&deploymentId=#{@config[:deployment_id]}&repoType=#{repo_type}"
+      complete_path = @owner_ajax_path + query
+      make_request(:get, complete_path)
+    end
+
+    def list_trigger_events(repo_name, pipeline_id = nil, commit_sha = nil)
+      query = if pipeline_id && commit_sha
+                "?op=ListTriggerEvents&repoName=#{repo_name}&pipelineId=#{pipeline_id}&commitId=#{commit_sha}"
+              else
+                "?op=ListTriggerEvents&repoName=#{repo_name}"
+              end
+      complete_path = @owner_ajax_path + query
+      make_request(:get, complete_path)
+    end
+
+    def get_pipeline(repo_type, repo_name, pipeline_id)
+      param = param_for_repo_type(repo_type)
+      query = "?op=GetPipeline&#{param}=#{repo_name}&pipelineId=#{pipeline_id}"
+      complete_path = @owner_ajax_path + query
+      make_request(:get, complete_path)
+    end
+
+    def get_impact_analysis(id)
+      query = "?op=GetImpactAnalysis&id=#{id}"
+      complete_path = @owner_ajax_path + query
+      make_request(:get, complete_path)
+    end
+
+    def search_impacted_nodes(environment_result_id)
+      query = "?op=SearchImpactedNodes&environmentResultId=#{environment_result_id}"
+      complete_path = @owner_ajax_path + query
+      make_request(:get, complete_path)
+    end
+
+    def get_cookie(login_user, login_pwd)
+      payload = {
+        op: 'PfiLogin',
+        content: {
+          email: login_user,
+          passwd: login_pwd,
+        },
+      }
+      make_request(:post, '/login', payload.to_json, 'anonymous')
     end
 
     private
 
-    def task_token
-      deployment_token = ENV['DEPLOYMENT_TOKEN']
-      job_token = ENV['JOB_TOKEN']
-      raise Puppet::Error, 'Could not get token for deployment or job instance' unless deployment_token || job_token
-      deployment_token || job_token
+    def deployment_token
+      token = ENV['DEPLOYMENT_TOKEN']
+      raise Puppet::Error, 'Could not get token for deployment' unless token
+
+      token
     end
 
-    def task_owner
-      deployment_owner = ENV['DEPLOYMENT_OWNER']
-      job_owner = ENV['JOB_OWNER']
-      raise Puppet::Error, 'Could not get owner for deployment or job instance' unless deployment_owner || job_owner
-      deployment_owner || job_owner
+    def deployment_owner
+      owner = ENV['DEPLOYMENT_OWNER']
+      raise Puppet::Error, 'Could not get owner for deployment' unless owner
+
+      owner
     end
 
-    def task_id
-      deployment_id = ENV['DEPLOYMENT_ID']
-      job_instance_id = ENV['JOB_INSTANCE_ID']
-      raise Puppet::Error, 'Could not get ID for deployment or job instance' unless deployment_id || job_instance_id
-      deployment_id || job_instance_id
+    def deployment_id
+      id = ENV['DEPLOYMENT_ID']
+      raise Puppet::Error, 'Could not get ID for deployment' unless id
+
+      id
     end
 
     def web_ui_endpoint
       endpoint = ENV['WEB_UI_ENDPOINT']
       raise Puppet::Error, 'Could not get CD4PE Web UI Endpoint' unless endpoint
+
       endpoint
     end
 
-    def make_request(type, api_url, payload = '')
+    def make_request(type, api_url, payload = '', auth_type = '', cookie = nil)
       connection = Net::HTTP.new(@config[:server], @config[:port])
       if @config[:scheme] == 'https'
         connection.use_ssl = true
@@ -208,10 +261,23 @@ module PuppetX::Puppetlabs
       timeout = ENV['CD4PE_MODULE_DEPLOY_READ_TIMEOUT'] || 600
       connection.read_timeout = timeout
 
-      headers = {
-        'Content-Type' => 'application/json',
-        'Authorization' => "Bearer token #{@config[:token]}",
-      }
+      if auth_type == 'cookie'
+        raise Puppet::Error, 'Invalid credentials provided' unless cookie
+
+        headers = {
+          'Content-Type' => 'application/json',
+          'Cookie' => cookie,
+        }
+      elsif auth_type == 'anonymous'
+        headers = {
+          'Content-Type' => 'application/json',
+        }
+      else
+        headers = {
+          'Content-Type' => 'application/json',
+          'Authorization' => "Bearer token #{@config[:token]}",
+        }
+      end
 
       max_attempts = 3
       attempts = 0
@@ -237,12 +303,8 @@ module PuppetX::Puppetlabs
         end
 
         case response
-        when Net::HTTPSuccess
+        when Net::HTTPSuccess, Net::HTTPRedirection
           return response
-        when Net::HTTPRedirection
-          return response
-        when Net::HTTPNotFound
-          raise Puppet::Error, "#{response.code} #{response.body}"
         when Net::HTTPInternalServerError
           if attempts < max_attempts # rubocop:disable Style/GuardClause
             Puppet.debug("Received #{response} error from #{service_url}, attempting to retry. (Attempt #{attempts} of #{max_attempts})")
@@ -260,10 +322,16 @@ module PuppetX::Puppetlabs
       "#{@config[:scheme]}://#{@config[:server]}:#{@config[:port]}"
     end
 
-    def create_and_write_temp_file(file_path, data)
-      open(file_path, "wb") do |file|
-        file.write(data)
+    def param_for_repo_type(repo_type)
+      case repo_type
+      when 'CONTROL_REPO'
+        param = 'controlRepoName'
+      when 'MODULE'
+        param = 'moduleName'
+      else
+        raise Puppet::Error, "Invalid repo_type specified: #{repo_type}"
       end
+      param
     end
   end
 end

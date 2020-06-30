@@ -10,7 +10,16 @@
 #
 # @summary This deployment policy will deploy the target control repository commit to
 #          target nodes in batches.
-#
+# @param max_node_failure
+#     The number of allowed failed Puppet runs that can occur before the Deployment will fail
+# @param batch_size
+#     The number of nodes in each batch to run Puppet on.
+# @param noop
+#     Indicates if the Puppet run should be a noop.
+# @param batch_delay
+#     The delay in seconds between each batch.
+# @param fail_if_no_nodes
+#     Toggles between failing or silently succeeding when the target environment group has no nodes.
 plan cd4pe_deployments::rolling (
   Optional[Integer] $max_node_failure,
   Integer $batch_size = 10,
@@ -69,7 +78,8 @@ plan cd4pe_deployments::rolling (
     }
   }
 
-  $branch = "ROLLING_DEPLOYMENT_${system::env('DEPLOYMENT_ID')}"
+  # Ensure our prefix is always lowercase to match to puppets suggested env regex pattern
+  $branch = "rolling_deployment_${system::env('DEPLOYMENT_ID')}"
   $tmp_git_branch_result = cd4pe_deployments::create_git_branch('CONTROL_REPO', $branch,  $sha, true)
   if ($tmp_git_branch_result[error]) {
     fail_plan("Could not create temporary git branch ${branch}: ${tmp_git_branch_result[error]}")
@@ -129,6 +139,12 @@ plan cd4pe_deployments::rolling (
   $update_target_branch_result = cd4pe_deployments::update_git_branch_ref('CONTROL_REPO', $target_branch, $sha)
   if ($update_target_branch_result[error]) {
     fail_plan("Unable to update the target branch ${target_branch} to SHA ${sha}")
+  }
+
+  $final_code_deploy_result = cd4pe_deployments::deploy_code($target_environment)
+  $validate_final_code_deploy_result = cd4pe_deployments::validate_code_deploy_status($final_code_deploy_result)
+  unless ($validate_final_code_deploy_result[error] =~ Undef) {
+    fail_plan("Code deployment failed to target environment ${target_environment}: ${validate_final_code_deploy_result[error][message]}")
   }
 
   # Clean up the temporary temporary node group
