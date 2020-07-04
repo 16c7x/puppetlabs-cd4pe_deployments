@@ -12,7 +12,7 @@
 # @param fail_if_no_nodes
 #     Toggles between failing or silently succeeding when the target environment group has no nodes.
 
-plan cd4pedeployments::idempotent (
+plan cd4pe_deployments::idempotent (
   Integer $max_node_failure = 0,
   Boolean $noop = false,
   Boolean $fail_if_no_nodes = true,
