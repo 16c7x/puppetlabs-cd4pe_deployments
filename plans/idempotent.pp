@@ -1,26 +1,20 @@
 # This deployment policy will deploy a source commit to the Puppet environment
 # associated with the Deployment's configured Node Group. It will then run Puppet
-# on all nodes in the environemnt.
+# on all nodes in the environemnt twice. It will then query the Puppet DB and fail 
+# if any nodes report their state has changed during the second Puppet run. 
 #
-# @summary This deployment policy will deploy a source commit to the Puppet environment
-#          associated with the Deployment's configured node group and then run Puppet.
+# @summary This deployment policy checks for idempotence by running Puppet twice
+#          and checking no changes are made during the second run.
 #
-# @param max_node_failure
-#     The number of allowed failed Puppet runs that can occur before the Deployment will fail
-# @param noop
-#     Indicates if the Puppet run should be a noop.
 # @param fail_if_no_nodes
 #     Toggles between failing or silently succeeding when the target environment group has no nodes.
 
-plan cd4pe_deployments::idempotent (
-  Integer $max_node_failure = 0,
-  Boolean $noop = false,
+plan deployments::idempotent(
   Boolean $fail_if_no_nodes = true,
 ) {
   $repo_target_branch = system::env('REPO_TARGET_BRANCH')
   $source_commit = system::env('COMMIT')
   $target_node_group_id = system::env('NODE_GROUP_ID')
-
   $get_node_group_result = cd4pe_deployments::get_node_group($target_node_group_id)
   if $get_node_group_result['error'] =~ NotUndef {
     fail_plan($get_node_group_result['error']['message'], $get_node_group_result['error']['code'])
@@ -56,29 +50,26 @@ plan cd4pe_deployments::idempotent (
     }
   }
 
-  # Perform a Puppet run on all nodes in the environment
-  $puppet_first_run_result = cd4pe_deployments::run_puppet($nodes, $noop)
+  # Perform the first Puppet run on all nodes in the environment
+  $puppet_first_run_result = cd4pe_deployments::run_puppet($nodes, false)
   if $puppet_first_run_result['error'] =~ NotUndef {
     fail_plan($puppet_first_run_result['error']['message'], $puppet_first_run_result['error']['code'])
   }
 
+  # Check the catalog was successfully applied
   if $puppet_first_run_result['result']['nodeStates'] =~ NotUndef {
     if $puppet_first_run_result['result']['nodeStates']['failedNodes'] =~ NotUndef {
-      $node_failure_count = $puppet_first_run_result['result']['nodeStates']['failedNodes']
-      # Fail the deployment if the number of failures exceeds the threshold
-      if ($node_failure_count > $max_node_failure) {
-        fail_plan("Max node failure reached. ${node_failure_count} nodes failed.")
-      }
+      fail_plan('For the Idempotent test to work all nodes tested must have the cataloge successfully applied')
     }
   }
 
-  # Perform a Puppet run on all nodes in the environment
-  $puppet_second_run_result = cd4pe_deployments::run_puppet($nodes, $noop)
+  # Perform the second Puppet run on all nodes in the environment
+  $puppet_second_run_result = cd4pe_deployments::run_puppet($nodes, false)
   if $puppet_second_run_result['error'] =~ NotUndef {
     fail_plan($puppet_second_run_result['error']['message'], $puppet_second_run_result['error']['code'])
   }
 
-  #$targets = ['cdpetest.platform9.puppet.net', 'cdpetest.platform9.puppet.net']
+  # Check the report status for each node in Puppet DB
   $nodes.each |$item| {
     $testnodes = puppetdb_query(["from", "nodes", ["=", "certname", $item]])
     $result1 = $testnodes[0]
