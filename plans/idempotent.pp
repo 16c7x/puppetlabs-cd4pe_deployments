@@ -15,6 +15,7 @@ plan deployments::idempotent(
   $repo_target_branch = system::env('REPO_TARGET_BRANCH')
   $source_commit = system::env('COMMIT')
   $target_node_group_id = system::env('NODE_GROUP_ID')
+  
   $get_node_group_result = cd4pe_deployments::get_node_group($target_node_group_id)
   if $get_node_group_result['error'] =~ NotUndef {
     fail_plan($get_node_group_result['error']['message'], $get_node_group_result['error']['code'])
